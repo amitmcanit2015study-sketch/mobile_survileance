@@ -240,6 +240,49 @@ public class MediaStoreHelper {
         
         return videoList;
     }
+
+    public List<VideoInfo> getRecordedAudios() {
+        List<VideoInfo> audioList = new ArrayList<>();
+
+        String[] projection = {
+                MediaStore.Audio.Media._ID,
+                MediaStore.Audio.Media.DISPLAY_NAME,
+                MediaStore.Audio.Media.SIZE,
+                MediaStore.Audio.Media.DURATION,
+                MediaStore.Audio.Media.DATE_ADDED,
+                MediaStore.Audio.Media.DATA
+        };
+
+        String selection = MediaStore.Audio.Media.RELATIVE_PATH + " LIKE ?";
+        String[] selectionArgs = {"%/Surviliance%"};
+        String sortOrder = MediaStore.Audio.Media.DATE_ADDED + " DESC";
+
+        try (Cursor cursor = contentResolver.query(
+                MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
+                projection,
+                selection,
+                selectionArgs,
+                sortOrder)) {
+
+            if (cursor != null && cursor.moveToFirst()) {
+                do {
+                    VideoInfo audio = new VideoInfo();
+                    audio.setId(cursor.getLong(cursor.getColumnIndexOrThrow(MediaStore.Audio.Media._ID)));
+                    audio.setDisplayName(cursor.getString(cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.DISPLAY_NAME)));
+                    audio.setSize(cursor.getLong(cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.SIZE)));
+                    audio.setDuration(cursor.getLong(cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.DURATION)));
+                    audio.setDateTaken(cursor.getLong(cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.DATE_ADDED)) * 1000L);
+                    audio.setDataPath(cursor.getString(cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.DATA)));
+                    audio.setUri(ContentUris.withAppendedId(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, audio.getId()));
+                    audioList.add(audio);
+                } while (cursor.moveToNext());
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "Failed to query audios", e);
+        }
+
+        return audioList;
+    }
     
     /**
      * Delete a video from MediaStore
@@ -324,6 +367,12 @@ public class MediaStoreHelper {
         SimpleDateFormat dateFormat = new SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault());
         String timestamp = dateFormat.format(new Date());
         return "VID_" + timestamp + ".mp4";
+    }
+
+    public String generateAudioFileName() {
+        SimpleDateFormat dateFormat = new SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault());
+        String timestamp = dateFormat.format(new Date());
+        return "AUD_" + timestamp + ".m4a";
     }
     
     /**

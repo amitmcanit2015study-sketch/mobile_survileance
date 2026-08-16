@@ -10,6 +10,7 @@ import android.content.Intent;
 import android.content.pm.ServiceInfo;
 import android.os.Build;
 import android.os.IBinder;
+import android.os.PowerManager;
 import android.widget.Toast;
 
 import androidx.annotation.Nullable;
@@ -54,6 +55,7 @@ public class RecordingForegroundService extends Service {
     // Recording state
     private static final AtomicBoolean isRecording = new AtomicBoolean(false);
     private RecordingController recordingController;
+    private PowerManager.WakeLock wakeLock;
     
     @Override
     public void onCreate() {
@@ -84,6 +86,8 @@ public class RecordingForegroundService extends Service {
             Toast.makeText(this, "Recording already in progress", Toast.LENGTH_SHORT).show();
             return;
         }
+
+        acquireWakeLock();
         
         int cameraLens = intent.getIntExtra(EXTRA_CAMERA_LENS, 
                 android.hardware.camera2.CameraMetadata.LENS_FACING_BACK);
@@ -163,8 +167,28 @@ public class RecordingForegroundService extends Service {
     }
     
     private void stopForegroundService() {
+        releaseWakeLock();
         stopForeground(STOP_FOREGROUND_REMOVE);
         stopSelf();
+    }
+
+    private void acquireWakeLock() {
+        if (wakeLock != null && wakeLock.isHeld()) {
+            return;
+        }
+        PowerManager powerManager = (PowerManager) getSystemService(Context.POWER_SERVICE);
+        if (powerManager != null) {
+            wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "Surviliance:RecordingWakeLock");
+            wakeLock.setReferenceCounted(false);
+            wakeLock.acquire(10 * 60 * 1000L);
+        }
+    }
+
+    private void releaseWakeLock() {
+        if (wakeLock != null && wakeLock.isHeld()) {
+            wakeLock.release();
+        }
+        wakeLock = null;
     }
     
     private void createNotificationChannel() {

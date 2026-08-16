@@ -1,19 +1,25 @@
 package com.videorecorder.app;
 
 import android.Manifest;
+import android.content.ContentValues;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.location.Address;
 import android.location.Geocoder;
 import android.location.Location;
 import android.location.LocationManager;
+import android.media.MediaPlayer;
+import android.media.MediaRecorder;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Environment;
 import android.os.Handler;
 import android.os.Looper;
+import android.provider.MediaStore;
 import android.provider.Settings;
 import android.view.View;
+import android.view.WindowManager;
 import android.widget.AdapterView;
 import android.widget.ArrayAdapter;
 import android.widget.CheckBox;
@@ -33,8 +39,12 @@ import androidx.core.content.ContextCompat;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
+import com.google.android.material.button.MaterialButton;
+
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
 import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
@@ -44,10 +54,13 @@ public class MainActivity extends AppCompatActivity implements VideoAdapter.List
     private static final int PERMISSION_REQUEST_CODE = 1001;
     private static final int POST_NOTIFICATIONS_PERMISSION_CODE = 1002;
     private static final int LOCATION_PERMISSION_CODE = 1003;
+    private static final int TAB_VIDEO = 0;
+    private static final int TAB_AUDIO = 1;
 
     private ImageButton btnCameraSwitch;
-    private com.google.android.material.button.MaterialButton btnStartRecording;
-    private com.google.android.material.button.MaterialButton btnStopRecording;
+    private MaterialButton btnVideoTab;
+    private MaterialButton btnAudioTab;
+    private MaterialButton btnRecordToggle;
     private Spinner spinnerQuality;
     private TextView txtRecordingDuration;
     private TextView txtAudioStatus;
@@ -77,17 +90,21 @@ public class MainActivity extends AppCompatActivity implements VideoAdapter.List
     private boolean isRecording;
     private boolean isAudioEnabled = true;
     private boolean isGeoEnabled;
+    private boolean isAudioTabSelected;
     private GeoTagInfo currentGeoTag;
     private int currentCameraLens = android.hardware.camera2.CameraMetadata.LENS_FACING_BACK;
     private String currentQuality = "720p";
     private long recordingStartTime;
+    private MediaRecorder audioRecorder;
+    private File activeAudioFile;
+    private MediaPlayer activeAudioPlayer;
 
     private final Runnable durationTicker = new Runnable() {
         @Override
         public void run() {
             if (isRecording) {
                 long seconds = (System.currentTimeMillis() - recordingStartTime) / 1000;
-                txtRecordingDuration.setText(String.format(java.util.Locale.getDefault(), "%02d:%02d", seconds / 60, seconds % 60));
+                txtRecordingDuration.setText(String.format(Locale.getDefault(), "%02d:%02d", seconds / 60, seconds % 60));
                 handler.postDelayed(this, 1000);
             }
         }
@@ -106,6 +123,7 @@ public class MainActivity extends AppCompatActivity implements VideoAdapter.List
         initializeViews();
         setupQualitySpinner();
         setupRecordingsList();
+        updateTabSelection();
         checkPermissions();
         if (RecordingForegroundService.isRecordingActive()) {
             updateUIForRecordingState(true);
@@ -114,8 +132,9 @@ public class MainActivity extends AppCompatActivity implements VideoAdapter.List
 
     private void initializeViews() {
         btnCameraSwitch = findViewById(R.id.btnCameraSwitch);
-        btnStartRecording = findViewById(R.id.btnStartRecording);
-        btnStopRecording = findViewById(R.id.btnStopRecording);
+        btnVideoTab = findViewById(R.id.btnVideoTab);
+        btnAudioTab = findViewById(R.id.btnAudioTab);
+        btnRecordToggle = findViewById(R.id.btnRecordToggle);
         spinnerQuality = findViewById(R.id.spinnerQuality);
         txtRecordingDuration = findViewById(R.id.txtRecordingDuration);
         txtAudioStatus = findViewById(R.id.txtAudioStatus);
@@ -138,9 +157,16 @@ public class MainActivity extends AppCompatActivity implements VideoAdapter.List
         videoPlayer = findViewById(R.id.videoPlayer);
         txtPlayerName = findViewById(R.id.txtPlayerName);
 
+        btnVideoTab.setOnClickListener(view -> switchTab(TAB_VIDEO));
+        btnAudioTab.setOnClickListener(view -> switchTab(TAB_AUDIO));
+        btnRecordToggle.setOnClickListener(view -> {
+            if (isRecording) {
+                stopRecording();
+            } else {
+                startRecording();
+            }
+        });
         btnCameraSwitch.setOnClickListener(view -> switchCamera());
-        btnStartRecording.setOnClickListener(view -> startRecording());
-        btnStopRecording.setOnClickListener(view -> stopRecording());
         btnAudioToggle.setOnClickListener(view -> toggleAudio());
         btnGeoToggle.setOnClickListener(view -> toggleGeoTag());
         btnDeleteSelected.setOnClickListener(view -> confirmDeleteSelected());
@@ -152,6 +178,38 @@ public class MainActivity extends AppCompatActivity implements VideoAdapter.List
         });
         findViewById(R.id.btnClosePlayer).setOnClickListener(view -> closePlayer());
         RecordingController.setPreviewSurfaceProvider(cameraPreview.getSurfaceProvider());
+    }
+
+    private void switchTab(int tab) {
+        if (isRecording) {
+            Toast.makeText(this, "Stop the current recording before switching tabs", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        isAudioTabSelected = tab == TAB_AUDIO;
+        updateTabSelection();
+        loadMediaList();
+    }
+
+    private void updateTabSelection() {
+        btnVideoTab.setSelected(!isAudioTabSelected);
+        btnAudioTab.setSelected(isAudioTabSelected);
+        btnVideoTab.setBackgroundTintList(ContextCompat.getColorStateList(this,
+                !isAudioTabSelected ? R.color.accent_color : R.color.surface));
+        btnAudioTab.setBackgroundTintList(ContextCompat.getColorStateList(this,
+                isAudioTabSelected ? R.color.accent_color : R.color.surface));
+        if (!isAudioTabSelected) {
+            btnVideoTab.setTextColor(ContextCompat.getColor(this, R.color.white));
+            btnAudioTab.setTextColor(ContextCompat.getColor(this, R.color.text_secondary));
+        } else {
+            btnVideoTab.setTextColor(ContextCompat.getColor(this, R.color.text_secondary));
+            btnAudioTab.setTextColor(ContextCompat.getColor(this, R.color.white));
+        }
+        btnCameraSwitch.setVisibility(isAudioTabSelected ? View.GONE : View.VISIBLE);
+        spinnerQuality.setVisibility(isAudioTabSelected ? View.GONE : View.VISIBLE);
+        txtGeoStatus.setVisibility(isAudioTabSelected ? View.GONE : View.VISIBLE);
+        btnGeoToggle.setVisibility(isAudioTabSelected ? View.GONE : View.VISIBLE);
+        txtRecordingDuration.setText("00:00");
+        updateUIForRecordingState(false);
     }
 
     private void setupQualitySpinner() {
@@ -177,18 +235,19 @@ public class MainActivity extends AppCompatActivity implements VideoAdapter.List
     private void setupRecordingsList() {
         recordingsList.setLayoutManager(new LinearLayoutManager(this));
         recordingsList.setHasFixedSize(true);
-        loadVideos();
+        loadMediaList();
     }
 
-    private void loadVideos() {
+    private void loadMediaList() {
         videoList.clear();
-        videoList.addAll(mediaStoreHelper.getRecordedVideos());
+        videoList.addAll(isAudioTabSelected ? mediaStoreHelper.getRecordedAudios() : mediaStoreHelper.getRecordedVideos());
         videoAdapter = new VideoAdapter(this, videoList, this);
         recordingsList.setAdapter(videoAdapter);
         boolean empty = videoList.isEmpty();
         recordingsList.setVisibility(empty ? View.GONE : View.VISIBLE);
         txtEmptyRecordings.setVisibility(empty ? View.VISIBLE : View.GONE);
-        txtRecordingCount.setText(empty ? "No recordings yet" : videoList.size() + (videoList.size() == 1 ? " recording" : " recordings"));
+        String label = isAudioTabSelected ? "audio" : "video";
+        txtRecordingCount.setText(empty ? "No " + label + "s yet" : videoList.size() + (videoList.size() == 1 ? " " + label : " " + label + "s"));
         updateSelectionUi();
     }
 
@@ -350,8 +409,7 @@ public class MainActivity extends AppCompatActivity implements VideoAdapter.List
             if (Geocoder.isPresent()) {
                 try {
                     Geocoder geocoder = new Geocoder(this, Locale.getDefault());
-                    List<Address> addresses = geocoder.getFromLocation(
-                            bestLocation.getLatitude(), bestLocation.getLongitude(), 1);
+                    List<Address> addresses = geocoder.getFromLocation(bestLocation.getLatitude(), bestLocation.getLongitude(), 1);
                     if (addresses != null && !addresses.isEmpty()) {
                         addressText = addresses.get(0).getAddressLine(0);
                     }
@@ -359,18 +417,20 @@ public class MainActivity extends AppCompatActivity implements VideoAdapter.List
                     // Coordinates remain available if reverse geocoding is offline.
                 }
             }
-            return new GeoTagInfo(
-                    bestLocation.getLatitude(),
-                    bestLocation.getLongitude(),
+            return new GeoTagInfo(bestLocation.getLatitude(), bestLocation.getLongitude(),
                     bestLocation.hasAltitude() ? bestLocation.getAltitude() : 0d,
-                    System.currentTimeMillis(),
-                    addressText);
+                    System.currentTimeMillis(), addressText);
         } catch (SecurityException e) {
             return null;
         }
     }
 
     private void startRecording() {
+        getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        if (isAudioTabSelected) {
+            startAudioRecording();
+            return;
+        }
         if (!hasAllPermissions()) {
             checkPermissions();
             return;
@@ -397,31 +457,128 @@ public class MainActivity extends AppCompatActivity implements VideoAdapter.List
     }
 
     private void stopRecording() {
+        getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        if (isAudioTabSelected) {
+            stopAudioRecording();
+            return;
+        }
         Intent serviceIntent = new Intent(this, RecordingForegroundService.class);
         serviceIntent.setAction(RecordingForegroundService.ACTION_STOP_RECORDING);
         startService(serviceIntent);
         updateUIForRecordingState(false);
-        handler.postDelayed(this::loadVideos, 1200);
+        handler.postDelayed(this::loadMediaList, 1200);
+    }
+
+    private void startAudioRecording() {
+        if (!hasAllPermissions()) {
+            checkPermissions();
+            return;
+        }
+        try {
+            File musicDir = new File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC), "Surviliance");
+            if (!musicDir.exists() && !musicDir.mkdirs()) {
+                Toast.makeText(this, "Unable to create audio folder", Toast.LENGTH_SHORT).show();
+                return;
+            }
+            activeAudioFile = new File(musicDir, mediaStoreHelper.generateAudioFileName());
+            audioRecorder = new MediaRecorder();
+            audioRecorder.setAudioSource(MediaRecorder.AudioSource.MIC);
+            audioRecorder.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4);
+            audioRecorder.setAudioEncoder(MediaRecorder.AudioEncoder.AAC);
+            audioRecorder.setOutputFile(activeAudioFile.getAbsolutePath());
+            audioRecorder.prepare();
+            audioRecorder.start();
+            recordingStartTime = System.currentTimeMillis();
+            updateUIForRecordingState(true);
+        } catch (Exception e) {
+            Toast.makeText(this, "Audio recording failed: " + e.getMessage(), Toast.LENGTH_LONG).show();
+            if (audioRecorder != null) {
+                try {
+                    audioRecorder.release();
+                } catch (Exception ignored) {
+                }
+                audioRecorder = null;
+            }
+        }
+    }
+
+    private void stopAudioRecording() {
+        if (audioRecorder == null) {
+            updateUIForRecordingState(false);
+            return;
+        }
+        try {
+            audioRecorder.stop();
+        } catch (RuntimeException ignored) {
+            Toast.makeText(this, "Audio recording was interrupted", Toast.LENGTH_SHORT).show();
+        } finally {
+            try {
+                audioRecorder.release();
+            } catch (Exception ignored) {
+            }
+            audioRecorder = null;
+        }
+        if (activeAudioFile != null && activeAudioFile.exists()) {
+            saveAudioRecording(activeAudioFile);
+        }
+        activeAudioFile = null;
+        updateUIForRecordingState(false);
+        handler.postDelayed(this::loadMediaList, 500);
+    }
+
+    private void saveAudioRecording(File sourceFile) {
+        try {
+            ContentValues values = new ContentValues();
+            values.put(MediaStore.Audio.Media.DISPLAY_NAME, sourceFile.getName());
+            values.put(MediaStore.Audio.Media.MIME_TYPE, "audio/mp4");
+            values.put(MediaStore.Audio.Media.RELATIVE_PATH, Environment.DIRECTORY_MUSIC + "/Surviliance");
+            values.put(MediaStore.Audio.Media.DATE_ADDED, System.currentTimeMillis() / 1000);
+            values.put(MediaStore.Audio.Media.DATE_MODIFIED, System.currentTimeMillis() / 1000);
+            values.put(MediaStore.Audio.Media.IS_PENDING, 1);
+            Uri audioUri = getContentResolver().insert(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, values);
+            if (audioUri == null) {
+                return;
+            }
+            try (FileInputStream input = new FileInputStream(sourceFile);
+                 FileOutputStream output = new FileOutputStream(getContentResolver().openFileDescriptor(audioUri, "w").getFileDescriptor())) {
+                byte[] buffer = new byte[4096];
+                int read;
+                while ((read = input.read(buffer)) != -1) {
+                    output.write(buffer, 0, read);
+                }
+            }
+            ContentValues finalizeValues = new ContentValues();
+            finalizeValues.put(MediaStore.Audio.Media.IS_PENDING, 0);
+            getContentResolver().update(audioUri, finalizeValues, null, null);
+            sourceFile.delete();
+        } catch (Exception e) {
+            Toast.makeText(this, "Failed to save audio clip", Toast.LENGTH_SHORT).show();
+            if (sourceFile != null && sourceFile.exists()) {
+                sourceFile.delete();
+            }
+        }
     }
 
     private void updateUIForRecordingState(boolean recording) {
         isRecording = recording;
-        btnStartRecording.setEnabled(!recording);
-        btnStopRecording.setEnabled(recording);
-        btnCameraSwitch.setEnabled(!recording);
-        spinnerQuality.setEnabled(!recording);
+        btnRecordToggle.setEnabled(true);
+        btnRecordToggle.setText(recording ? "STOP" : (isAudioTabSelected ? "START AUDIO" : "START VIDEO"));
+        btnRecordToggle.setBackgroundTintList(ContextCompat.getColorStateList(this,
+                recording ? R.color.stop_color : R.color.start_color));
+        btnCameraSwitch.setEnabled(!recording && !isAudioTabSelected);
+        spinnerQuality.setEnabled(!recording && !isAudioTabSelected);
         btnAudioToggle.setEnabled(!recording);
-        btnGeoToggle.setEnabled(!recording);
-        recordingPreviewCard.setVisibility(recording ? View.VISIBLE : View.GONE);
-        if (recording) {
+        btnGeoToggle.setEnabled(!recording && !isAudioTabSelected);
+        recordingPreviewCard.setVisibility(recording && !isAudioTabSelected ? View.VISIBLE : View.GONE);
+        if (recording && !isAudioTabSelected) {
             txtPreviewCamera.setText(currentCameraLens == android.hardware.camera2.CameraMetadata.LENS_FACING_BACK
-                ? "Back camera" : "Front camera");
+                    ? "Back camera" : "Front camera");
             txtPreviewAudio.setText(isAudioEnabled ? "Audio ON" : "Audio OFF");
             txtPreviewAudio.setTextColor(ContextCompat.getColor(this,
-                isAudioEnabled ? R.color.success_color : R.color.error_color));
+                    isAudioEnabled ? R.color.success_color : R.color.error_color));
             txtPreviewGeo.setText(isGeoEnabled && currentGeoTag != null ? "Geo ON" : "Geo OFF");
             txtPreviewGeo.setTextColor(ContextCompat.getColor(this,
-                isGeoEnabled && currentGeoTag != null ? R.color.success_color : R.color.text_secondary));
+                    isGeoEnabled && currentGeoTag != null ? R.color.success_color : R.color.text_secondary));
             recordingStartTime = System.currentTimeMillis();
             txtRecordingDuration.setText("00:00");
             txtRecordingDuration.setVisibility(View.VISIBLE);
@@ -429,7 +586,11 @@ public class MainActivity extends AppCompatActivity implements VideoAdapter.List
             handler.post(durationTicker);
         } else {
             handler.removeCallbacks(durationTicker);
-            txtRecordingDuration.setVisibility(View.GONE);
+            txtRecordingDuration.setVisibility(View.VISIBLE);
+            txtRecordingDuration.setText("00:00");
+            if (!recording) {
+                txtRecordingDuration.setText("00:00");
+            }
         }
     }
 
@@ -444,6 +605,10 @@ public class MainActivity extends AppCompatActivity implements VideoAdapter.List
 
     @Override
     public void onPlay(MediaStoreHelper.VideoInfo video) {
+        if (isAudioTabSelected) {
+            playAudioClip(video);
+            return;
+        }
         txtPlayerName.setText(video.getDisplayName());
         MediaController mediaController = new MediaController(this);
         mediaController.setAnchorView(videoPlayer);
@@ -457,8 +622,29 @@ public class MainActivity extends AppCompatActivity implements VideoAdapter.List
         videoPlayer.start();
     }
 
+    private void playAudioClip(MediaStoreHelper.VideoInfo audio) {
+        try {
+            if (activeAudioPlayer != null) {
+                activeAudioPlayer.release();
+            }
+            activeAudioPlayer = new MediaPlayer();
+            activeAudioPlayer.setDataSource(this, audio.getUri());
+            activeAudioPlayer.prepare();
+            activeAudioPlayer.start();
+            Toast.makeText(this, "Playing " + audio.getDisplayName(), Toast.LENGTH_SHORT).show();
+        } catch (Exception e) {
+            Toast.makeText(this, "Unable to play audio clip", Toast.LENGTH_SHORT).show();
+        }
+    }
+
     private void closePlayer() {
-        videoPlayer.stopPlayback();
+        if (videoPlayer != null) {
+            videoPlayer.stopPlayback();
+        }
+        if (activeAudioPlayer != null) {
+            activeAudioPlayer.release();
+            activeAudioPlayer = null;
+        }
         playerPanel.setVisibility(View.GONE);
         controlPanel.setVisibility(View.VISIBLE);
         recordingsHeader.setVisibility(View.VISIBLE);
@@ -473,7 +659,7 @@ public class MainActivity extends AppCompatActivity implements VideoAdapter.List
                 .setMessage(video.getDisplayName())
                 .setPositiveButton("Delete", (dialog, which) -> {
                     mediaStoreHelper.deleteVideo(video.getUri());
-                    loadVideos();
+                    loadMediaList();
                 })
                 .setNegativeButton("Cancel", null)
                 .show();
@@ -501,14 +687,14 @@ public class MainActivity extends AppCompatActivity implements VideoAdapter.List
                 mediaStoreHelper.deleteVideo(video.getUri());
             }
         }
-        loadVideos();
+        loadMediaList();
     }
 
     @Override
     protected void onResume() {
         super.onResume();
         if (mediaStoreHelper != null && playerPanel != null && playerPanel.getVisibility() != View.VISIBLE) {
-            loadVideos();
+            loadMediaList();
         }
         if (RecordingForegroundService.isRecordingActive()) {
             updateUIForRecordingState(true);
@@ -518,6 +704,15 @@ public class MainActivity extends AppCompatActivity implements VideoAdapter.List
     @Override
     protected void onDestroy() {
         handler.removeCallbacks(durationTicker);
+        if (audioRecorder != null) {
+            try {
+                audioRecorder.release();
+            } catch (Exception ignored) {
+            }
+        }
+        if (activeAudioPlayer != null) {
+            activeAudioPlayer.release();
+        }
         RecordingController.setPreviewSurfaceProvider(null);
         super.onDestroy();
     }

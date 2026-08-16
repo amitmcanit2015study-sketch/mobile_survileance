@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">Video Recorder</string>
+    <string name="app_name">Surviliance</string>
     
     <!-- Main Activity -->
     <string name="start_recording">Start Recording</string>
