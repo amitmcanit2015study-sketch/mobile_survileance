@@ -77,8 +77,6 @@ public class MainActivity extends AppCompatActivity implements VideoAdapter.List
     private View recordingPreviewCard;
     private PreviewView cameraPreview;
     private TextView txtPreviewCamera;
-    private TextView txtPreviewAudio;
-    private TextView txtPreviewGeo;
     private View playerPanel;
     private VideoView videoPlayer;
     private TextView txtPlayerName;
@@ -151,8 +149,6 @@ public class MainActivity extends AppCompatActivity implements VideoAdapter.List
         recordingPreviewCard = findViewById(R.id.recordingPreviewCard);
         cameraPreview = findViewById(R.id.cameraPreview);
         txtPreviewCamera = findViewById(R.id.txtPreviewCamera);
-        txtPreviewAudio = findViewById(R.id.txtPreviewAudio);
-        txtPreviewGeo = findViewById(R.id.txtPreviewGeo);
         playerPanel = findViewById(R.id.playerPanel);
         videoPlayer = findViewById(R.id.videoPlayer);
         txtPlayerName = findViewById(R.id.txtPlayerName);
@@ -426,7 +422,10 @@ public class MainActivity extends AppCompatActivity implements VideoAdapter.List
     }
 
     private void startRecording() {
-        getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
+                | WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
+                | WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED
+                | WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD);
         if (isAudioTabSelected) {
             startAudioRecording();
             return;
@@ -457,7 +456,10 @@ public class MainActivity extends AppCompatActivity implements VideoAdapter.List
     }
 
     private void stopRecording() {
-        getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
+                | WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
+                | WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED
+                | WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD);
         if (isAudioTabSelected) {
             stopAudioRecording();
             return;
@@ -570,15 +572,12 @@ public class MainActivity extends AppCompatActivity implements VideoAdapter.List
         btnAudioToggle.setEnabled(!recording);
         btnGeoToggle.setEnabled(!recording && !isAudioTabSelected);
         recordingPreviewCard.setVisibility(recording && !isAudioTabSelected ? View.VISIBLE : View.GONE);
+        if (cameraPreview != null) {
+            cameraPreview.setVisibility(View.GONE);
+        }
         if (recording && !isAudioTabSelected) {
             txtPreviewCamera.setText(currentCameraLens == android.hardware.camera2.CameraMetadata.LENS_FACING_BACK
-                    ? "Back camera" : "Front camera");
-            txtPreviewAudio.setText(isAudioEnabled ? "Audio ON" : "Audio OFF");
-            txtPreviewAudio.setTextColor(ContextCompat.getColor(this,
-                    isAudioEnabled ? R.color.success_color : R.color.error_color));
-            txtPreviewGeo.setText(isGeoEnabled && currentGeoTag != null ? "Geo ON" : "Geo OFF");
-            txtPreviewGeo.setTextColor(ContextCompat.getColor(this,
-                    isGeoEnabled && currentGeoTag != null ? R.color.success_color : R.color.text_secondary));
+                    ? "Rear camera active" : "Front camera active");
             recordingStartTime = System.currentTimeMillis();
             txtRecordingDuration.setText("00:00");
             txtRecordingDuration.setVisibility(View.VISIBLE);

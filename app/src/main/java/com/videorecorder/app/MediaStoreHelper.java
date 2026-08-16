@@ -108,63 +108,44 @@ public class MediaStoreHelper {
     }
 
     public Uri saveRecordedVideo(File sourceFile, String filename, long durationMs, GeoTagInfo geoTagInfo) {
-        File muxedFile = null;
+        if (sourceFile == null || !sourceFile.exists() || sourceFile.length() <= 0) {
+            Log.e(TAG, "Recorded video source file missing or empty");
+            return null;
+        }
+
         Uri videoUri = null;
         try {
-            muxedFile = File.createTempFile("geo_video_", ".mp4", context.getCacheDir());
-            MediaExtractor extractor = new MediaExtractor();
-            extractor.setDataSource(sourceFile.getAbsolutePath());
-            MediaMuxer muxer = new MediaMuxer(muxedFile.getAbsolutePath(), MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4);
-            if (geoTagInfo != null) {
-                muxer.setLocation((float) geoTagInfo.getLatitude(), (float) geoTagInfo.getLongitude());
-            }
-            int[] trackMap = new int[extractor.getTrackCount()];
-            for (int index = 0; index < extractor.getTrackCount(); index++) {
-                trackMap[index] = muxer.addTrack(extractor.getTrackFormat(index));
-            }
-            muxer.start();
-            java.nio.ByteBuffer buffer = java.nio.ByteBuffer.allocate(1024 * 1024);
-            MediaCodec.BufferInfo bufferInfo = new MediaCodec.BufferInfo();
-            for (int index = 0; index < extractor.getTrackCount(); index++) {
-                extractor.selectTrack(index);
-                while (true) {
-                    buffer.clear();
-                    int sampleSize = extractor.readSampleData(buffer, 0);
-                    if (sampleSize < 0) {
-                        break;
-                    }
-                    bufferInfo.offset = 0;
-                    bufferInfo.size = sampleSize;
-                    bufferInfo.presentationTimeUs = extractor.getSampleTime();
-                    bufferInfo.flags = extractor.getSampleFlags();
-                    muxer.writeSampleData(trackMap[index], buffer, bufferInfo);
-                    extractor.advance();
-                }
-                extractor.unselectTrack(index);
-            }
-            muxer.stop();
-            muxer.release();
-            extractor.release();
-
             long finalizedAt = System.currentTimeMillis();
             ContentValues values = createVideoContentValues(filename);
+            values.put(MediaStore.Video.Media.DURATION, durationMs);
+            values.put(MediaStore.Video.Media.DATE_TAKEN, finalizedAt);
+            values.put(MediaStore.Video.Media.DATE_ADDED, finalizedAt / 1000);
+            values.put(MediaStore.Video.Media.DATE_MODIFIED, finalizedAt / 1000);
+
             videoUri = contentResolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, values);
             if (videoUri == null) {
+                Log.e(TAG, "MediaStore insert returned null for video file");
                 return null;
             }
+
             try (ParcelFileDescriptor descriptor = contentResolver.openFileDescriptor(videoUri, "w")) {
                 if (descriptor == null) {
+                    Log.e(TAG, "Could not open MediaStore output stream for video");
+                    contentResolver.delete(videoUri, null, null);
                     return null;
                 }
-                try (FileInputStream input = new FileInputStream(muxedFile);
+
+                try (FileInputStream input = new FileInputStream(sourceFile);
                      FileOutputStream output = new FileOutputStream(descriptor.getFileDescriptor())) {
                     byte[] copyBuffer = new byte[8192];
                     int read;
                     while ((read = input.read(copyBuffer)) != -1) {
                         output.write(copyBuffer, 0, read);
                     }
+                    output.flush();
                 }
             }
+
             ContentValues finalizedValues = new ContentValues();
             finalizedValues.put(MediaStore.Video.Media.IS_PENDING, 0);
             finalizedValues.put(MediaStore.Video.Media.DURATION, durationMs);
@@ -172,21 +153,21 @@ public class MediaStoreHelper {
             finalizedValues.put(MediaStore.Video.Media.DATE_ADDED, finalizedAt / 1000);
             finalizedValues.put(MediaStore.Video.Media.DATE_MODIFIED, finalizedAt / 1000);
             contentResolver.update(videoUri, finalizedValues, null, null);
+
             if (geoTagInfo != null) {
                 saveGeoTag(videoUri, geoTagInfo);
             }
+
+            Log.d(TAG, "Saved recorded video directly to MediaStore: " + videoUri);
             return videoUri;
         } catch (Exception e) {
-            Log.e(TAG, "Failed to save MP4 with geo metadata", e);
+            Log.e(TAG, "Failed to save recorded video directly to MediaStore", e);
             if (videoUri != null) {
                 contentResolver.delete(videoUri, null, null);
             }
             return null;
         } finally {
-            if (muxedFile != null && muxedFile.exists()) {
-                muxedFile.delete();
-            }
-            if (sourceFile.exists()) {
+            if (sourceFile != null && sourceFile.exists()) {
                 sourceFile.delete();
             }
         }

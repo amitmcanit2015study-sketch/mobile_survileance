@@ -178,9 +178,15 @@ public class RecordingForegroundService extends Service {
         }
         PowerManager powerManager = (PowerManager) getSystemService(Context.POWER_SERVICE);
         if (powerManager != null) {
-            wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "Surviliance:RecordingWakeLock");
+            int wakeFlags = PowerManager.PARTIAL_WAKE_LOCK;
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+                wakeFlags |= PowerManager.SCREEN_BRIGHT_WAKE_LOCK;
+            }
+            wakeLock = powerManager.newWakeLock(
+                    wakeFlags | PowerManager.ACQUIRE_CAUSES_WAKEUP,
+                    "Surviliance:RecordingWakeLock");
             wakeLock.setReferenceCounted(false);
-            wakeLock.acquire(10 * 60 * 1000L);
+            wakeLock.acquire(30 * 60 * 1000L);
         }
     }
 

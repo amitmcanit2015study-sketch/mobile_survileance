@@ -91,6 +91,7 @@ public class RecordingController implements LifecycleOwner {
     private File recordingFile;
     private int currentCameraLens = CameraSelector.LENS_FACING_BACK;
     private String currentQuality = "720p";
+    private volatile boolean stopRequestedByUser;
     
     private long recordingStartTime;
     private final Runnable durationUpdateRunnable;
@@ -244,6 +245,8 @@ public class RecordingController implements LifecycleOwner {
      * Start video recording
      */
     private void startRecording() {
+        stopRequestedByUser = false;
+
         if (videoCapture == null) {
             ErrorHandler.handleCameraUnavailable(context, callback);
             return;
@@ -281,27 +284,44 @@ public class RecordingController implements LifecycleOwner {
                         VideoRecordEvent.Finalize finalizeEvent = (VideoRecordEvent.Finalize) videoRecordEvent;
                         
                         mainHandler.removeCallbacks(durationUpdateRunnable);
-                        
-                        if (!finalizeEvent.hasError()) {
-                            long duration = System.currentTimeMillis() - recordingStartTime;
 
-                            Uri videoUri = mediaStoreHelper.saveRecordedVideo(
-                                    recordingFile, name, duration, geoTagInfo);
-                            if (videoUri == null) {
-                                throw new IllegalStateException("Unable to save recorded video");
+                        try {
+                            if (!finalizeEvent.hasError()) {
+                                long duration = System.currentTimeMillis() - recordingStartTime;
+
+                                Uri videoUri = mediaStoreHelper.saveRecordedVideo(
+                                        recordingFile, name, duration, geoTagInfo);
+                                if (videoUri == null) {
+                                    Log.e(TAG, "Unable to save recorded video to MediaStore");
+                                    if (callback != null) {
+                                        callback.onRecordingError("Unable to save recorded video");
+                                    }
+                                    return;
+                                }
+
+                                Log.d(TAG, "Recording saved to: " + videoUri);
+                                if (callback != null) {
+                                    callback.onRecordingStopped(videoUri.toString());
+                                }
+                                return;
                             }
-                            
-                            Log.d(TAG, "Recording saved to: " + videoUri);
+
+                            int errorCode = finalizeEvent.getError();
+                            Log.e(TAG, "Recording error code: " + errorCode + ", stopRequestedByUser=" + stopRequestedByUser);
+
+                            if (stopRequestedByUser) {
+                                Log.i(TAG, "User stopped recording; suppressing interruption error.");
+                                return;
+                            }
+
                             if (callback != null) {
-                                callback.onRecordingStopped(videoUri.toString());
+                                callback.onRecordingError(
+                                        "Recording interrupted while the device was locking or the camera was unavailable. Keep the screen awake during recording. Error code: " + errorCode);
                             }
-                        } else {
-                            Log.e(TAG, "Recording error: " + finalizeEvent.getError());
-                            ErrorHandler.handleUnknownError(context, 
-                                    new Exception(String.valueOf(finalizeEvent.getError())), callback);
+                        } finally {
+                            currentRecording = null;
+                            stopRequestedByUser = false;
                         }
-                        
-                        currentRecording = null;
                     }
                 });
     }
@@ -310,9 +330,17 @@ public class RecordingController implements LifecycleOwner {
      * Stop current recording
      */
     public void stopRecording() {
-        if (currentRecording != null) {
+        if (currentRecording == null) {
+            return;
+        }
+
+        stopRequestedByUser = true;
+
+        try {
             currentRecording.stop();
-            currentRecording = null;
+        } catch (IllegalStateException e) {
+            Log.w(TAG, "Stop requested while recording state was not active", e);
+            stopRequestedByUser = false;
         }
     }
     
@@ -356,8 +384,13 @@ public class RecordingController implements LifecycleOwner {
         mainHandler.removeCallbacks(durationUpdateRunnable);
         
         if (currentRecording != null) {
-            currentRecording.stop();
-            currentRecording = null;
+            try {
+                currentRecording.stop();
+            } catch (IllegalStateException e) {
+                Log.w(TAG, "Cleanup stop requested while no active recording existed", e);
+            } finally {
+                currentRecording = null;
+            }
         }
         
         if (cameraProvider != null) {

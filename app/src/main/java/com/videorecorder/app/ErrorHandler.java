@@ -194,8 +194,12 @@ public class ErrorHandler {
      */
     public static void handleUnknownError(Context context, Exception e, RecordingController.RecordingCallback callback) {
         Log.e(TAG, "Unknown error occurred", e);
+        String message = (e != null && e.getMessage() != null && !e.getMessage().trim().isEmpty())
+                ? e.getMessage()
+                : "Recording was interrupted";
+
         if (callback != null) {
-            callback.onRecordingError("An unexpected error occurred: " + e.getMessage());
+            callback.onRecordingError("Recording interrupted. Keep the screen awake and avoid locking the phone during capture. Details: " + message);
         }
     }
     
